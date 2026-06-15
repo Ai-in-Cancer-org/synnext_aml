@@ -1,0 +1,18 @@
+# Core Dependencies
+pandas==2.3.3
+numpy==2.3.5
+dython==0.7.10
+
+#Modeling
+scikit-learn==1.6.1
+hyperimpute==0.1.17
+scipy==1.16.3
+tabpfn==6.2.0
+tabpfn-extensions==0.2.2
+
+#survival Dynamics
+lifelines==0.30.0
+
+#visualization
+matplotlib==3.10.8
+seaborn==0.13.2
