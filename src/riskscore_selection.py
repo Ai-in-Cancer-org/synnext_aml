@@ -1,13 +1,18 @@
-from sklearn.preprocessing import OneHotEncoder, StandardScaler,RobustScaler
-from sklearn.compose import make_column_transformer, make_column_selector
-from sklearn.pipeline import make_pipeline
+
 from hyperimpute.plugins.imputers import Imputers
 import numpy as np
 from lifelines import KaplanMeierFitter
 from lifelines.statistics import logrank_test
 import matplotlib.pyplot as plt
 import pandas as pd
+from helpers import *
+from joblib import dump, load
+from pathlib import Path
+from typing import Tuple
 
+from survival_metrics import log_rank_analysis
+from helpers import riskscore_matching
+from preprocessing import preprocessing_riskscoore_matching
 
 def range_based_filter(
     original_df: pd.DataFrame,
@@ -65,29 +70,113 @@ def range_based_filter(
     return selected
 
 
-def selection_riskscore_based(original_df, synthetic_df, survival_time_column="EFSTM", cox_coef="full", closest=1, soraml=False):
-    # load cox_coefficients
-    cox_coef=pd.read_csv("../results/EFS_COX_RS.csv")
+def selection_riskscore_based(
+    original_df: pd.DataFrame,
+    synthetic_df: pd.DataFrame,
+    closest: int = 1,
+    survival_time_column: str = "EFSTM",
+    survival_event_column : str = "EFSSTAT",
+    cox_coef_path: str | Path = "../results/EFS_COX_RS.csv",
+    preprocessor_path: str | Path = "preprocessor.joblib",
+) -> Tuple[pd.DataFrame, float]:
+    """
+    Select synthetic samples that best match the original cohort based on Cox risk scores.
 
-    continuous_columns, binary_columns=infer_column_types(synthetic_df)
-    continuous_columns.pop(survival_time_column)
-    #range filtering
-    syn_preselected=range_based_filter(original_df,synthetic_df, continuous_columns)
+    The function:
+    1. Loads Cox model coefficients.
+    2. Infers continuous and binary columns from the synthetic data.
+    3. Applies range-based filtering to remove synthetic samples outside the
+       original data distribution.
+    4. Applies preprocessing and imputation.
+    5. Computes Cox-based risk scores for both original and synthetic samples.
+    6. Selects synthetic samples whose risk scores most closely match the original cohort.
+    7. Performs a log-rank test between selected synthetic and original survival curves.
 
-    #select significant features
-    features=[col for col in synthetic_df.columns]# if col in df.columns]
-    original_df_processed=preprocessing_pre(original_df[[col for col in features if col in original_df.columns]])
-    synthetic_df_processed=preprocessing_pre(syn_preselected[[col for col in features if col in syn_preselected.columns]])
+    Parameters
+    ----------
+    original_df : pd.DataFrame
+        Original real cohort data.
 
-    # risk score
-    synth_score=compute_risk_score(synthetic_df_processed, cox_coef, features)
-    original_score=compute_risk_score(original_df_processed, cox_coef, features)
-    selection_indicies=riskscore_matching(original_score, synth_score, closest=closest)
-    syn_selected=syn_preselected.loc[selection_indicies,:]
+    synthetic_df : pd.DataFrame
+        Synthetic cohort data from which samples will be selected.
 
-    p_value=log_rank_analysis(syn_selected, original_df, survival=survival)
-    print(f"p value of log-rank test {p_value}")
-    # kp_curve=KM_curve(original_df,syn_selected, survival=survival)
-    # return f"Selected {syn_selected.shape[0]} patients from {syn_preselected.shape[0]}"
-    syn_selected["AGE"]=np.floor(syn_selected["AGE"]).astype("int")
-    return syn_selected, p_value
+    closest : int, default=1
+        Number of closest synthetic samples to select per original sample.
+
+    survival_time_column : str, default="EFSTM"
+        Name of the survival time column to exclude from continuous feature filtering.
+    
+    survival_event_column : str, default="EFSSTAT"
+        Survival outcome event column name
+
+    cox_coef_path : str | Path, default="../results/EFS_COX_RS.csv"
+        Path to the CSV file containing Cox model coefficients.
+
+    preprocessor_path : str | Path, default="preprocessor.joblib"
+        Path to the fitted preprocessing pipeline.
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, float]
+        synthetic_cohort_selected : pd.DataFrame
+            Selected synthetic samples matched by risk score.
+
+        logrank_p_value : float
+            Log-rank test p-value comparing selected synthetic and original survival data.
+    """
+    
+    #load pre trained CoxPh model co-efficients
+    cox_coef = pd.read_csv(cox_coef_path)
+
+    #Find the continuous column
+    continuous_columns, binary_columns = infer_column_types(synthetic_df)
+
+    #Delete Outcome Variable
+    if survival_time_column in continuous_columns:
+        continuous_columns.remove(survival_time_column)
+
+    # Range based Filtering
+    synthetic_preselected = range_based_filter(
+        original_df,
+        synthetic_df,
+        continuous_columns,survival_time_column
+    )
+    
+    # preprocees the real data for riskscore calculation
+    original_df_processed = preprocessing_riskscoore_matching(
+        original_df,
+        preprocessor_path=preprocessor_path,
+    )
+
+    # preprocees the synthetic data for riskscore calculation
+    synthetic_df_processed = preprocessing_riskscoore_matching(
+        synthetic_preselected,
+        preprocessor_path=preprocessor_path,
+    )
+
+    # compute patient specific risk scores for real and synthetic data
+    synthetic_riskscore = compute_risk_score(synthetic_df_processed, cox_coef)
+    original_riskscore = compute_risk_score(original_df_processed, cox_coef)
+
+    # Match real and synthetic data based on risk score comparison
+    selection_indices = riskscore_matching(
+        original_riskscore,
+        synthetic_riskscore,
+        closest=closest,
+    )
+    
+    synthetic_cohort_selected = synthetic_preselected.loc[selection_indices, :].copy()
+
+    # calculate the log-rank p-vale between selected synthetic cohorts and real data
+    p_value = log_rank_analysis(
+        synthetic_cohort_selected,
+        original_df,
+        survival_time_column=survival_time_column,
+        survival_event_column=survival_event_column,
+    )
+
+    #convert age column into integer
+    if "AGE" in synthetic_cohort_selected.columns:
+        synthetic_cohort_selected["AGE"] = np.floor(synthetic_cohort_selected["AGE"]).astype(int)
+    synthetic_cohort_selected[binary_columns]=synthetic_cohort_selected[binary_columns].astype("int")
+    return synthetic_cohort_selected, p_value

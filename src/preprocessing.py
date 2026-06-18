@@ -25,26 +25,32 @@ def preprocessing_riskscoore_matching(
     pd.DataFrame
         Preprocessed dataframe with transformed feature names and the original index.
     """
-
+    
     # impute missing values in the data
     plugin = Imputers().get("missforest", random_state=42)
-    x_imputed = plugin.fit_transform(data)
+    X_impute = plugin.fit_transform(data)
 
+    # Identify continuous columns for scaling
+    continuous_columns, binary_columns = infer_column_types(X_impute)
 
     #preprocess the data using pipeline used in the cox_regression
     preprocessor = load(preprocessor_path)
 
-    x_processed = pd.DataFrame(
-        preprocessor.transform(x_imputed),
+    
+     # Transform data and return as a DataFrame
+    X_continuous = pd.DataFrame(
+        preprocessor.transform(X_impute),
         columns=preprocessor.get_feature_names_out(),
-        index=data.index,
     )
 
-    x_processed.columns = [
-        col.split("_")[-1] for col in x_processed.columns
-    ]
+    # rename to original column names
+    X_continuous.columns=[col.split("_")[-1] for col in X_continuous.columns]
 
-    return x_processed
+    #merge binary columns
+    X_processed=pd.concat([X_continuous, X_impute[binary_columns]], axis=1)
+    X_processed.index=data.index
+
+    return X_processed
 
 def feature_selection( data: pd.DataFrame,
                       drop_columns: list[str]= [],

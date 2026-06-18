@@ -2,13 +2,14 @@ from lifelines import CoxPHFitter
 import pandas as pd
 import numpy as np
 
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, RobustScaler
-from sklearn.compose import make_column_transformer, make_column_selector
-from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import RobustScaler
+from sklearn.compose import make_column_transformer
+from sklearn.pipeline import Pipeline
+
 from hyperimpute.plugins.imputers import Imputers
 from helpers import infer_column_types
 
-def preprocessing_coxph(df: pd.DataFrame) -> pd.DataFrame:
+def preprocessing_coxph(df: pd.DataFrame) -> tuple[pd.DataFrame, Pipeline]:
     """
     Preprocess feature data for Cox Proportional Hazards modeling.
 
@@ -26,6 +27,9 @@ def preprocessing_coxph(df: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         Preprocessed dataframe with imputed values and scaled continuous
         features, ready for Cox Proportional Hazards model fitting.
+    Pipeline
+        Preprocessor pipeline used for the COX propotional hazard modeling
+        
     """
 
     # Impute missing values using MissForest
@@ -33,30 +37,32 @@ def preprocessing_coxph(df: pd.DataFrame) -> pd.DataFrame:
     X_impute = plugin.fit_transform(df)
 
     # Identify continuous columns for scaling
-    continuous_columns, _ = infer_column_types(X_impute)
+    continuous_columns, binary_columns = infer_column_types(X_impute)
 
     # Scale continuous variables and retain remaining columns
     preprocessor = make_column_transformer(
-        (RobustScaler(), continuous_columns),
-        remainder="passthrough",
+        (RobustScaler(), continuous_columns)
     )
 
     # Transform data and return as a DataFrame
-    X_processed = pd.DataFrame(
+    X_continuous = pd.DataFrame(
         preprocessor.fit_transform(X_impute),
         columns=preprocessor.get_feature_names_out(),
     )
 
     # rename to original column names
-    X_processed.columns=[col.split("_")[-1] for col in X_processed.columns]
+    X_continuous.columns=[col.split("_")[-1] for col in X_continuous.columns]
 
-    return X_processed
+    #merge binary columns
+    X_processed=pd.concat([X_continuous, X_impute[binary_columns]], axis=1)
+
+    return X_processed, preprocessor
 
 
 def coxph_model( df: pd.DataFrame,
                 survival_time_column: str = "EFSTM",
     survival_event_column: str = "EFSSTAT",
-    )-> pd.DataFrame:
+    )-> tuple[pd.DataFrame, Pipeline]:
     """
     Compute optimism between real and synthetic survival data.
 
@@ -76,12 +82,14 @@ def coxph_model( df: pd.DataFrame,
     pd.DataFrame
         DataFrame containing cox-correlation co-efficients for each feature
         along with thier stastical significance values.
+    Pipeline
+        Preprocessor pipeline used for the COX propotional hazard modeling
     """
 
     #preprocessing of the data
     X=df.drop(columns=[survival_event_column,survival_time_column])
     y=df[[survival_event_column,survival_time_column]]
-    X_processed=preprocessing_coxph(X)
+    X_processed, preprocessor=preprocessing_coxph(X)
     X_COX=pd.concat([X_processed,y], axis=1)
 
     # Fit Cox model
@@ -89,4 +97,4 @@ def coxph_model( df: pd.DataFrame,
     coxph.fit(X_COX, duration_col=survival_time_column, event_col=survival_event_column)
     coxph_df= coxph.summary.copy()
 
-    return coxph_df
+    return coxph_df, preprocessor

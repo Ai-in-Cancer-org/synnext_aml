@@ -6,38 +6,33 @@ import pandas as pd
 import numpy as np
 
 
-def chi2_test(df1: pd.DataFrame,
+def fisher_exact_binary(df1: pd.DataFrame,
     df2: pd.DataFrame,
     list_of_columns: list[str]):
 
-    n1 = len(df1)
-    n2 = len(df2)
+     # 1️⃣ Count positive class (1s)
+    counts_real = df1[list_of_columns].sum()
+    counts_synth = df2[list_of_columns].sum()
     
-        #Value counts per group
-    counts1 = df1[list_of_columns].value_counts()
-    counts2 = df2[list_of_columns].value_counts()
+    # 2️⃣ Compute p-values per feature (Fisher exact test)
+    pvals = []
+    for col in list_of_columns:
+        pos_real = counts_real[col]
+        pos_synth = counts_synth[col]
+        neg_real = len(df1) - pos_real
+        neg_synth = len(df2) - pos_synth
+        table = np.array([[pos_real, neg_real],
+                          [pos_synth, neg_synth]])
+        # print(col,table)
+        _, p = fisher_exact(table, alternative="two-sided")
+        pvals.append(p)
     
-    # 2) All categories present in either dataframe
-    categories = sorted(set(counts1.index) | set(counts2.index))
+    # 3️⃣ Combine counts + p-values
+    count_df = pd.DataFrame({
+        "% Positive Real Data": np.round(100*counts_real/df1.shape[0],3),
+        "% Positive Synthetic Data": np.round(100*counts_synth/df2.shape[0], 3),
+        "p_value": np.round(pvals, 3)
+    }, index=list_of_columns)
+    count_df=count_df.sort_index(ascending=False)
     
-    results = {}
-
-    
-    for cat in categories:
-        # Counts for this category in each group
-        cat1 = counts1.get(cat, 0)
-        cat2 = counts2.get(cat, 0)
-    
-        # "Not this category" counts
-        not_cat1 = n1 - cat1
-        not_cat2 = n2 - cat2
-    
-        # 2x2 table:
-        # [ [cat in group1, cat in group2],
-        #   [not-cat in group1, not-cat in group2] ]
-        table = [[cat1, cat2],
-                 [not_cat1, not_cat2]]
-        chi2, p_value, dof, expected = chi2_contingency(table)
-    
-        results[cat]=p_value
-    return results
+    return count_df

@@ -28,7 +28,7 @@ The repository consists of independent Python modules implementing individual me
    - Stastical Similarity
    - Synthcity Metrics
    - TabSynDex Metrics
-6. Evaluate survival utility:
+5. Evaluate survival utility:
    - Log-Rank Test
    - KM Divergence
    - Optimism
